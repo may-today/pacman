@@ -1,6 +1,6 @@
 # Munch Maze
 
-A small browser maze-chase game: eat every pellet in the maze while staying away from the four spiky Gloomlings.
+A small 8-bit, pixel-art browser maze-chase game: eat every pellet in the maze while staying away from the four spiky Gloomlings.
 
 ## Play
 
@@ -45,4 +45,4 @@ They switch between scattering to their corners and chasing on a timer.
 
 - `index.html` – page layout and HUD
 - `style.css` – styling
-- `game.js` – game logic, AI, rendering (canvas) and sound (Web Audio)
+- `game.js` – game logic, AI, pixel-art sprites and rendering (168×168 canvas scaled up with nearest-neighbour), chiptune sound (Web Audio)

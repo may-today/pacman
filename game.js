@@ -112,7 +112,7 @@ const Sound = {
     osc.start(t0);
     osc.stop(t0 + dur + 0.02);
   },
-  pellet() { this.toggle ^= 1; this.tone(this.toggle ? 620 : 480, 0.06, { type: 'triangle', vol: 0.05 }); },
+  pellet() { this.toggle ^= 1; this.tone(this.toggle ? 620 : 480, 0.05, { type: 'square', vol: 0.035 }); },
   power() { this.tone(200, 0.35, { type: 'sawtooth', vol: 0.05, to: 900 }); },
   eatEnemy() { this.tone(300, 0.25, { type: 'square', vol: 0.06, to: 1600 }); },
   bonus() { [700, 900, 1200].forEach((f, i) => this.tone(f, 0.09, { type: 'triangle', delay: i * 0.07 })); },
@@ -490,7 +490,7 @@ function updatePlaying(dt) {
         e.fright = false;
         e.state = 'eaten';
         addScore(pts);
-        S.popups.push({ x: e.x, y: e.y, text: pts, t: 1, color: '#7df9ff' });
+        S.popups.push({ x: e.x, y: e.y, text: pts, t: 1, color: '#00ffff' });
         Sound.eatEnemy();
         setMode('eatpause', 0.45);
         return;
@@ -503,9 +503,27 @@ function updatePlaying(dt) {
 }
 
 /* ------------------------------------------------------------ rendering */
-let T = 24;            // tile size in CSS px
-let wallLayer = null;  // pre-rendered maze
-let wallLayerFlash = null;
+// Everything is drawn at native 8-bit resolution (8px tiles, 168×168 board)
+// and scaled up by the browser with nearest-neighbour filtering.
+const TILE = 8;
+const W = COLS * TILE, H = ROWS * TILE;
+const SPR = 14; // sprite size in pixels (overlaps the corridor like old arcade sprites)
+canvas.width = W;
+canvas.height = H;
+ctx.imageSmoothingEnabled = false;
+
+const PAL = {
+  bg: '#000000',
+  wall: '#2b4cff',
+  wallFill: '#0a0a32',
+  wallFlash: '#ffffff',
+  wallFlashFill: '#3a3a8a',
+  pellet: '#ffb8ae',
+  orb: '#ffb8ae',
+  gate: '#ffb8ff',
+  scared: '#2121de',
+  scaredFlash: '#f4f4f4',
+};
 
 function resize() {
   const hud = document.getElementById('hud').offsetHeight;
@@ -513,244 +531,286 @@ function resize() {
   const dpadH = getComputedStyle(dpad).display === 'none' ? 0 : dpad.offsetHeight + 10;
   const availW = window.innerWidth - 32;
   const availH = window.innerHeight - hud - dpadH - 40;
-  T = Math.max(10, Math.floor(Math.min(availW / COLS, availH / ROWS)));
-  const dpr = window.devicePixelRatio || 1;
-  canvas.style.width = COLS * T + 'px';
-  canvas.style.height = ROWS * T + 'px';
-  canvas.width = Math.round(COLS * T * dpr);
-  canvas.height = Math.round(ROWS * T * dpr);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  wallLayer = buildWalls('#4f7cff', '#0b1236', dpr);
-  wallLayerFlash = buildWalls('#ffffff', '#2a3570', dpr);
+  let scale = Math.min(availW / W, availH / H);
+  // Whole-number scaling keeps every pixel the same size.
+  scale = scale >= 2 ? Math.floor(scale) : Math.max(1, scale);
+  canvas.style.width = W * scale + 'px';
+  canvas.style.height = H * scale + 'px';
+  document.documentElement.style.setProperty('--tile', TILE * scale + 'px');
 }
 
-function buildWalls(edge, fill, dpr) {
+/* --- sprite helpers --- */
+function makeSprite(rows, palette) {
   const c = document.createElement('canvas');
-  c.width = canvas.width;
-  c.height = canvas.height;
+  c.width = rows[0].length;
+  c.height = rows.length;
   const g = c.getContext('2d');
-  g.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-  const shape = (inset, color, radius) => {
-    g.fillStyle = color;
-    g.beginPath();
-    for (let r = 0; r < ROWS; r++) {
-      for (let col = 0; col < COLS; col++) {
-        if (!isWall(col, r)) continue;
-        const x = col * T, y = r * T;
-        if (g.roundRect) g.roundRect(x + inset, y + inset, T - 2 * inset, T - 2 * inset, radius);
-        else g.rect(x + inset, y + inset, T - 2 * inset, T - 2 * inset);
-        if (isWall(col + 1, r)) g.rect(x + T / 2, y + inset, T, T - 2 * inset);
-        if (isWall(col, r + 1)) g.rect(x + inset, y + T / 2, T - 2 * inset, T);
-        if (isWall(col + 1, r) && isWall(col, r + 1) && isWall(col + 1, r + 1)) g.rect(x + T / 2, y + T / 2, T, T);
-      }
-    }
-    g.fill();
-  };
-
-  const inset = T * 0.2;
-  const lw = Math.max(1.5, T * 0.09);
-  g.shadowColor = edge;
-  g.shadowBlur = T * 0.45;
-  shape(inset, edge, T * 0.3);
-  g.shadowBlur = 0;
-  shape(inset + lw, fill, T * 0.22);
-
-  // Den gate
-  g.fillStyle = '#ff9ad5';
-  g.fillRect(DOOR.x * T + T * 0.05, (DOOR.y + 1) * T + T * 0.42, T * 0.9, T * 0.16);
+  rows.forEach((row, y) => [...row].forEach((ch, x) => {
+    if (palette[ch]) { g.fillStyle = palette[ch]; g.fillRect(x, y, 1, 1); }
+  }));
   return c;
 }
+const px = (x, y, w, h, color) => { ctx.fillStyle = color; ctx.fillRect(x, y, w, h); };
+
+const PLAYER_ROWS = [
+  '.......ll.....',
+  '......lll.....',
+  '....KKKKKK....',
+  '..KKLLGGGGKK..',
+  '.KLLGGGGGGGGK.',
+  '.KLGGGGGGGGGK.',
+  'KGGGGGGGGGGGGK',
+  'KGGGGGGGGGGGGK',
+  'KGGGGGGGGGGGGK',
+  'KGGGGGGGGGGGDK',
+  '.KGGGGGGGGGDK.',
+  '.KDGGGGGGGDDK.',
+  '..KKDDDDDDKK..',
+  '....KKKKKK....',
+];
+const playerSprite = makeSprite(PLAYER_ROWS, {
+  K: '#0f4a22', G: '#5ee05a', L: '#c6ffa8', D: '#2f9a3a', l: '#7bdc3c',
+});
+
+const ENEMY_FRAMES = [
+  [
+    'B.....BB.....B',
+    '.BB..BBBB..BB.',
+    '.BBBBBBBBBBBB.',
+    '..BHHBBBBBBB..',
+    '.BHBBBBBBBBBB.',
+    'BBBBBBBBBBBBBB',
+    '.BBBBBBBBBBBB.',
+    '.BBBBBBBBBBBB.',
+    'BBBBBBBBBBBBBB',
+    '.BBBBBBBBBBBB.',
+    '..BBBBBBBBBB..',
+    '.BBBBBBBBBBBB.',
+    '.BB..BBBB..BB.',
+    'B.....BB.....B',
+  ],
+  [
+    '...B..BB..B...',
+    '....BBBBBB....',
+    '..BBBBBBBBBB..',
+    '.BBHHBBBBBBBB.',
+    'BBHBBBBBBBBBBB',
+    '..BBBBBBBBBB..',
+    '.BBBBBBBBBBBB.',
+    '.BBBBBBBBBBBB.',
+    '..BBBBBBBBBB..',
+    'BBBBBBBBBBBBBB',
+    '.BBBBBBBBBBBB.',
+    '..BBBBBBBBBB..',
+    '....BBBBBB....',
+    '...B..BB..B...',
+  ],
+];
+function lighten(hex, amt) {
+  const n = parseInt(hex.slice(1), 16);
+  const ch = s => Math.round(((n >> s) & 255) + (255 - ((n >> s) & 255)) * amt);
+  return `rgb(${ch(16)},${ch(8)},${ch(0)})`;
+}
+const enemySpriteCache = new Map();
+function enemySprite(color, frame) {
+  const key = color + frame;
+  if (!enemySpriteCache.has(key)) {
+    enemySpriteCache.set(key, makeSprite(ENEMY_FRAMES[frame], { B: color, H: lighten(color, 0.55) }));
+  }
+  return enemySpriteCache.get(key);
+}
+
+const GEM_ROWS = [
+  '....W....',
+  '...WCC...',
+  '..WCCCC..',
+  '.WCCCCCD.',
+  'WCCCCCCDD',
+  '.CCCCCDD.',
+  '..CCCDD..',
+  '...CDD...',
+  '....D....',
+];
+const gemCache = new Map();
+function gemSprite(color) {
+  if (!gemCache.has(color)) {
+    const dark = color.replace(/^#/, '');
+    const n = parseInt(dark, 16);
+    const d = `rgb(${((n >> 16) & 255) * 0.55 | 0},${((n >> 8) & 255) * 0.55 | 0},${(n & 255) * 0.55 | 0})`;
+    gemCache.set(color, makeSprite(GEM_ROWS, { W: '#ffffff', C: color, D: d }));
+  }
+  return gemCache.get(color);
+}
+
+const ORB_ROWS = ['.XXXX.', 'XXXXXX', 'XXXXXX', 'XXXXXX', 'XXXXXX', '.XXXX.'];
+const orbSprite = makeSprite(ORB_ROWS, { X: PAL.orb });
+
+const DIGITS = {
+  0: ['111', '101', '101', '101', '111'], 1: ['010', '110', '010', '010', '111'],
+  2: ['111', '001', '111', '100', '111'], 3: ['111', '001', '111', '001', '111'],
+  4: ['101', '101', '111', '001', '001'], 5: ['111', '100', '111', '001', '111'],
+  6: ['111', '100', '111', '101', '111'], 7: ['111', '001', '010', '010', '010'],
+  8: ['111', '101', '111', '101', '111'], 9: ['111', '101', '111', '001', '111'],
+};
+function drawNumber(str, cx, cy, color) {
+  str = String(str);
+  const w = str.length * 4 - 1;
+  let x = Math.round(cx - w / 2);
+  const y = Math.round(cy - 2);
+  ctx.fillStyle = color;
+  for (const ch of str) {
+    DIGITS[ch].forEach((row, j) => [...row].forEach((b, i) => { if (b === '1') ctx.fillRect(x + i, y + j, 1, 1); }));
+    x += 4;
+  }
+}
+
+/* --- maze --- */
+function buildWalls(edge, fill) {
+  const mask = new Uint8Array(W * H);
+  const box = (x, y, w, h) => {
+    for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) {
+      if (i >= 0 && j >= 0 && i < W && j < H) mask[j * W + i] = 1;
+    }
+  };
+  const I = 2; // inset from corridor
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (!isWall(c, r)) continue;
+      const x = c * TILE, y = r * TILE;
+      box(x + I, y + I, TILE - 2 * I, TILE - 2 * I);
+      if (isWall(c + 1, r)) box(x + TILE / 2, y + I, TILE, TILE - 2 * I);
+      if (isWall(c, r + 1)) box(x + I, y + TILE / 2, TILE - 2 * I, TILE);
+      if (isWall(c + 1, r) && isWall(c, r + 1) && isWall(c + 1, r + 1)) box(x + TILE / 2, y + TILE / 2, TILE, TILE);
+    }
+  }
+  const m = (i, j) => i >= 0 && j >= 0 && i < W && j < H && mask[j * W + i] === 1;
+  // Knock off convex corner pixels for a rounded 8-bit look
+  const clear = [];
+  for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
+    if (!m(i, j)) continue;
+    const u = m(i, j - 1), d = m(i, j + 1), l = m(i - 1, j), r = m(i + 1, j);
+    if ((!u && !l) || (!u && !r) || (!d && !l) || (!d && !r)) clear.push(j * W + i);
+  }
+  for (const k of clear) mask[k] = 0;
+
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
+    if (!m(i, j)) continue;
+    const isEdge = !m(i, j - 1) || !m(i, j + 1) || !m(i - 1, j) || !m(i + 1, j);
+    g.fillStyle = isEdge ? edge : fill;
+    g.fillRect(i, j, 1, 1);
+  }
+  // Den gate
+  g.fillStyle = PAL.gate;
+  g.fillRect(DOOR.x * TILE, (DOOR.y + 1) * TILE + 3, TILE, 2);
+  return c;
+}
+const wallLayer = buildWalls(PAL.wall, PAL.wallFill);
+const wallLayerFlash = buildWalls(PAL.wallFlash, PAL.wallFlashFill);
+
+/* --- drawing --- */
+const spritePos = a => [Math.round((a.x + 0.5) * TILE - SPR / 2), Math.round((a.y + 0.5) * TILE - SPR / 2)];
 
 function drawPellets() {
-  const pulse = 0.75 + 0.25 * Math.sin(S.time * 8);
+  const orbOn = S.mode !== 'playing' || Math.floor(S.time * 5) % 2 === 0;
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
       const v = S.pellets[r][c];
-      if (!v) continue;
-      const cx = (c + 0.5) * T, cy = (r + 0.5) * T;
-      ctx.beginPath();
-      if (v === 1) {
-        ctx.fillStyle = '#ffdcb0';
-        ctx.arc(cx, cy, T * 0.1, 0, Math.PI * 2);
-      } else {
-        ctx.fillStyle = '#ffb36b';
-        ctx.shadowColor = '#ffb36b';
-        ctx.shadowBlur = T * 0.6;
-        ctx.arc(cx, cy, T * 0.28 * pulse, 0, Math.PI * 2);
-      }
-      ctx.fill();
-      ctx.shadowBlur = 0;
+      if (v === 1) px(c * TILE + 3, r * TILE + 3, 2, 2, PAL.pellet);
+      else if (v === 2 && orbOn) ctx.drawImage(orbSprite, c * TILE + 1, r * TILE + 1);
     }
+  }
+}
+
+function drawPlayerFace(x, y, f, mouthOpen) {
+  const ex = f.x, ey = f.y;
+  for (const ox of [4, 8]) {
+    px(x + ox + ex, y + 5 + ey, 2, 3, '#0d1a2b');
+    px(x + ox + ex, y + 5 + ey, 1, 1, '#ffffff');
+  }
+  const mx = x + 5 + ex, my = y + 9 + Math.min(0, ey);
+  if (mouthOpen) {
+    px(mx, my, 4, 3, '#3a0d1a');
+    px(mx + 1, my + 2, 2, 1, '#ff5a7a');
+  } else {
+    px(mx, my + 1, 4, 1, '#3a0d1a');
   }
 }
 
 function drawPlayer() {
   const p = S.player;
-  let scale = 1, rot = 0, alpha = 1;
+  const [x, y] = spritePos(p);
   if (S.mode === 'dying') {
     const k = 1 - Math.max(0, S.stateT) / 1.6; // 0 → 1
-    scale = Math.max(0, 1 - k * 1.1);
-    rot = k * Math.PI * 4;
-    alpha = Math.max(0, 1 - k);
+    if (k > 0.75) {
+      // Pixel burst
+      const dist = Math.round(((k - 0.75) / 0.25) * 9);
+      const cx = x + SPR / 2 - 1, cy = y + SPR / 2 - 1;
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        px(Math.round(cx + Math.cos(a) * dist), Math.round(cy + Math.sin(a) * dist), 2, 2, i % 2 ? '#c6ffa8' : '#5ee05a');
+      }
+      return;
+    }
+    if (k > 0.15) {
+      // Melt away from the top, row by row
+      const cut = Math.floor(((k - 0.15) / 0.6) * SPR);
+      ctx.drawImage(playerSprite, 0, cut, SPR, SPR - cut, x, y + cut, SPR, SPR - cut);
+      return;
+    }
   }
-  const R = T * 0.44 * scale;
-  if (R <= 0.5) return;
-  const cx = (p.x + 0.5) * T, cy = (p.y + 0.5) * T;
-  const f = p.facing;
-  const chomp = Math.abs(Math.sin(p.anim * 14));
-  const squash = 1 + 0.06 * chomp;
-
-  ctx.save();
-  ctx.globalAlpha = alpha;
-  ctx.translate(cx, cy);
-  ctx.rotate(rot);
-  ctx.scale(squash, 2 - squash);
-
-  // Leaf sprout
-  ctx.fillStyle = '#3fbf5a';
-  ctx.beginPath();
-  ctx.ellipse(R * 0.25, -R * 1.02, R * 0.32, R * 0.14, -0.5, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Body
-  const grad = ctx.createRadialGradient(-R * 0.35, -R * 0.35, R * 0.1, 0, 0, R);
-  grad.addColorStop(0, '#e2ffd8');
-  grad.addColorStop(0.55, '#72e886');
-  grad.addColorStop(1, '#2c9a49');
-  ctx.fillStyle = grad;
-  ctx.beginPath();
-  ctx.arc(0, 0, R, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Face shifted toward travel direction
-  const fx = f.x * R * 0.28, fy = f.y * R * 0.22;
-  ctx.fillStyle = '#0d1a2b';
-  for (const side of [-1, 1]) {
-    ctx.beginPath();
-    ctx.ellipse(fx + side * R * 0.3, fy - R * 0.22, R * 0.11, R * 0.16, 0, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.fillStyle = '#ffffff';
-  for (const side of [-1, 1]) {
-    ctx.beginPath();
-    ctx.arc(fx + side * R * 0.3 + R * 0.03, fy - R * 0.28, R * 0.045, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  // Chomping mouth
-  ctx.fillStyle = '#4a1022';
-  ctx.beginPath();
-  ctx.ellipse(fx, fy + R * 0.3, R * 0.3, R * (0.05 + 0.2 * chomp), 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
+  ctx.drawImage(playerSprite, x, y);
+  const mouthOpen = !isZero(p.dir) && Math.floor(p.anim * 12) % 2 === 0;
+  drawPlayerFace(x, y, p.facing, mouthOpen);
 }
 
 function drawEnemy(e) {
   if (S.mode === 'dying' && S.stateT < 1.2) return;
-  let cx = (e.x + 0.5) * T, cy = (e.y + 0.5) * T;
-  if (e.state === 'den') cy += Math.sin(S.time * 6 + e.spin) * T * 0.15;
-  const R = T * 0.44;
-  const look = e.dir;
+  let [x, y] = spritePos(e);
+  if (e.state === 'den') y += Math.round(Math.sin(S.time * 6 + e.spin) * 1.5);
+  const frame = Math.floor(S.time * 6 + e.spin) % 2;
+  const eyesOnly = e.state === 'eaten' || e.state === 'entering';
 
-  if (e.state !== 'eaten' && e.state !== 'entering') {
-    let color = e.color;
+  if (!eyesOnly) {
     if (e.fright) {
       const flashing = S.frightT < 2 && Math.floor(S.frightT * 6) % 2 === 0;
-      color = flashing ? '#f2f4ff' : '#3448ff';
-    }
-    // Spiky body
-    const spikes = 9;
-    ctx.fillStyle = color;
-    ctx.shadowColor = color;
-    ctx.shadowBlur = T * 0.35;
-    ctx.beginPath();
-    for (let i = 0; i <= spikes * 2; i++) {
-      const a = e.spin + (i / (spikes * 2)) * Math.PI * 2;
-      const rr = i % 2 === 0 ? R : R * 0.76;
-      const x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr;
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
-    ctx.closePath();
-    ctx.fill();
-    ctx.shadowBlur = 0;
-
-    if (e.fright) {
-      // Scared face
-      ctx.fillStyle = '#ffd1d1';
-      for (const s of [-1, 1]) {
-        ctx.beginPath();
-        ctx.arc(cx + s * R * 0.26, cy - R * 0.15, R * 0.09, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.strokeStyle = '#ffd1d1';
-      ctx.lineWidth = Math.max(1, T * 0.06);
-      ctx.beginPath();
-      for (let i = 0; i <= 4; i++) {
-        const x = cx - R * 0.36 + (i * R * 0.72) / 4;
-        const y = cy + R * 0.25 + (i % 2 ? -1 : 1) * R * 0.08;
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      }
-      ctx.stroke();
+      const face = flashing ? '#ff2a2a' : '#ffb8ae';
+      ctx.drawImage(enemySprite(flashing ? PAL.scaredFlash : PAL.scared, frame), x, y);
+      px(x + 4, y + 5, 2, 2, face);
+      px(x + 8, y + 5, 2, 2, face);
+      for (let i = 0; i < 8; i++) px(x + 3 + i, y + 9 + (i % 2), 1, 1, face); // wobbly mouth
       return;
     }
+    ctx.drawImage(enemySprite(e.color, frame), x, y);
   }
-
-  // Eyes (also all that's left when eaten)
-  for (const s of [-1, 1]) {
-    const ex = cx + s * R * 0.3, ey = cy - R * 0.1;
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.arc(ex, ey, R * 0.23, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#121a3a';
-    ctx.beginPath();
-    ctx.arc(ex + look.x * R * 0.1, ey + look.y * R * 0.1, R * 0.11, 0, Math.PI * 2);
-    ctx.fill();
+  const d = e.dir;
+  const ox = d.x > 0 ? 1 : 0;
+  const oy = d.y < 0 ? 0 : d.y > 0 ? 2 : 1;
+  for (const ex of [3, 8]) {
+    px(x + ex, y + 4, 3, 4, '#ffffff');
+    px(x + ex + ox, y + 4 + oy, 2, 2, '#1a1aa8');
   }
 }
 
 function drawBonus() {
   const b = S.bonus;
   if (!b || (b.t < 2 && Math.floor(b.t * 8) % 2 === 0)) return;
-  const cx = (b.x + 0.5) * T, cy = (b.y + 0.5) * T + Math.sin(S.time * 4) * T * 0.06;
-  const r = T * 0.36;
-  ctx.fillStyle = b.color;
-  ctx.shadowColor = b.color;
-  ctx.shadowBlur = T * 0.5;
-  ctx.beginPath();
-  ctx.moveTo(cx, cy - r);
-  ctx.lineTo(cx + r * 0.8, cy - r * 0.2);
-  ctx.lineTo(cx, cy + r);
-  ctx.lineTo(cx - r * 0.8, cy - r * 0.2);
-  ctx.closePath();
-  ctx.fill();
-  ctx.shadowBlur = 0;
-  ctx.fillStyle = 'rgba(255,255,255,0.6)';
-  ctx.beginPath();
-  ctx.moveTo(cx, cy - r);
-  ctx.lineTo(cx + r * 0.3, cy - r * 0.2);
-  ctx.lineTo(cx - r * 0.3, cy - r * 0.2);
-  ctx.closePath();
-  ctx.fill();
+  const bob = Math.floor(S.time * 3) % 2;
+  ctx.drawImage(gemSprite(b.color), Math.round((b.x + 0.5) * TILE - 4), Math.round((b.y + 0.5) * TILE - 4) - bob);
 }
 
 function drawPopups() {
-  ctx.font = `bold ${Math.round(T * 0.6)}px "Trebuchet MS", sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
   for (const p of S.popups) {
-    ctx.globalAlpha = Math.min(1, p.t * 2);
-    ctx.fillStyle = p.color;
-    ctx.fillText(p.text, (p.x + 0.5) * T, (p.y + 0.5) * T - (1 - p.t) * T * 0.6);
+    drawNumber(p.text, (p.x + 0.5) * TILE, (p.y + 0.5) * TILE - Math.round((1 - p.t) * 4), p.color);
   }
-  ctx.globalAlpha = 1;
 }
 
 function render() {
-  ctx.fillStyle = '#050816';
-  ctx.fillRect(0, 0, COLS * T, ROWS * T);
+  px(0, 0, W, H, PAL.bg);
   const flash = S.mode === 'clear' && Math.floor(S.stateT * 5) % 2 === 0;
-  ctx.drawImage(flash ? wallLayerFlash : wallLayer, 0, 0, COLS * T, ROWS * T);
+  ctx.drawImage(flash ? wallLayerFlash : wallLayer, 0, 0);
   if (S.mode === 'title') return;
 
   drawPellets();
@@ -759,6 +819,19 @@ function render() {
   if (S.mode !== 'eatpause') drawPlayer();
   drawPopups();
 }
+
+// Pixel life icon for the HUD
+(() => {
+  const c = document.createElement('canvas');
+  c.width = SPR; c.height = SPR;
+  const g = c.getContext('2d');
+  const dot = (x, y, w, h, col) => { g.fillStyle = col; g.fillRect(x, y, w, h); };
+  g.drawImage(playerSprite, 0, 0);
+  dot(4, 5, 2, 3, '#0d1a2b'); dot(8, 5, 2, 3, '#0d1a2b');
+  dot(4, 5, 1, 1, '#ffffff'); dot(8, 5, 1, 1, '#ffffff');
+  dot(5, 10, 4, 1, '#3a0d1a');
+  document.documentElement.style.setProperty('--life-icon', `url(${c.toDataURL()})`);
+})();
 
 /* ------------------------------------------------------------------ HUD */
 function updateHud() {
@@ -776,7 +849,7 @@ function renderOverlay() {
   switch (S.mode) {
     case 'title':
       el.title.textContent = 'MUNCH MAZE';
-      el.sub.innerHTML = 'Press <kbd>Enter</kbd> or tap to start';
+      el.sub.innerHTML = 'PUSH <kbd>ENTER</kbd> OR TAP';
       el.help.style.display = '';
       break;
     case 'ready':
@@ -786,11 +859,11 @@ function renderOverlay() {
       break;
     case 'paused':
       el.title.textContent = 'PAUSED';
-      el.sub.innerHTML = 'Press <kbd>P</kbd> or tap to resume';
+      el.sub.innerHTML = 'PUSH <kbd>P</kbd> OR TAP';
       break;
     case 'gameover':
       el.title.textContent = 'GAME OVER';
-      el.sub.innerHTML = `Score ${S.score}<br>Press <kbd>Enter</kbd> or tap to play again`;
+      el.sub.innerHTML = `SCORE ${S.score}<br>PUSH <kbd>ENTER</kbd> TO RETRY`;
       break;
     default:
       o.classList.add('hidden');
