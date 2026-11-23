@@ -2,6 +2,8 @@
 
 A small 8-bit, pixel-art browser maze-chase game: eat every pellet in the maze while staying away from the four spiky Gloomlings.
 
+The walls across the top of the maze spell out **MAYDAY**. You can weave between the letters, and they hold pellets like any other corridor.
+
 ## Play
 
 Open `index.html` in a browser. There's no build step and nothing to install.

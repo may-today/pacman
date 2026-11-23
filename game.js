@@ -4,29 +4,36 @@
  * Munch Maze — an original maze-chase mini game.
  * Legend:  #  wall    .  pellet    o  power orb    -  gate
  *          G  den (enemy home)     P  player start    (space) empty floor
+ * The walls along the top spell out "MAYDAY".
  * ========================================================================= */
 const MAP = [
-  '#####################',
-  '#.........#.........#',
-  '#o###.###.#.###.###o#',
-  '#...................#',
-  '#.###.#.#####.#.###.#',
-  '#.....#...#...#.....#',
-  '#####.###.#.###.#####',
-  '#####.#.......#.#####',
-  '#####.#.##-##.#.#####',
-  '     ...#GGG#...     ',
-  '#####.#.#####.#.#####',
-  '#####.#.......#.#####',
-  '#####.#.#####.#.#####',
-  '#...................#',
-  '#o##.###.###.###.##o#',
-  '#..#......P......#..#',
-  '##.#.#.#######.#.#.##',
-  '#....#....#....#....#',
-  '#.#######.#.#######.#',
-  '#...................#',
-  '#####################',
+  '###############################',
+  '#.............................#',
+  '#.#####.###.#.#.####..###.#.#.#',
+  '#.#.#.#.# #.#.#.#  ##.# #.#.#.#',
+  '#.#.#.#.###.###.#   #.###.###.#',
+  '#.#.#.#.#.#..#..#  ##.#.#..#..#',
+  '#.#.#.#.#.#..#..####..#.#..#..#',
+  '#.............................#',
+  '#o########.###.#.###.########o#',
+  '#.............................#',
+  '#.########.#.#####.#.########.#',
+  '#..........#...#...#..........#',
+  '##########.###.#.###.##########',
+  '##########.#.......#.##########',
+  '##########.#.##-##.#.##########',
+  '          ...#GGG#...          ',
+  '##########.#.#####.#.##########',
+  '##########.#.......#.##########',
+  '##########.#.#####.#.##########',
+  '#.............................#',
+  '#o#######.###.###.###.#######o#',
+  '#..######......P......######..#',
+  '##.######.#.#######.#.######.##',
+  '#.........#....#....#.........#',
+  '#.############.#.############.#',
+  '#.............................#',
+  '###############################',
 ];
 const COLS = MAP[0].length;
 const ROWS = MAP.length;
@@ -36,10 +43,19 @@ const NONE = { x: 0, y: 0 };
 const DIR_ORDER = [UP, LEFT, DOWN, RIGHT]; // tie-break order for enemy pathing
 const DIR_BY_NAME = { up: UP, down: DOWN, left: LEFT, right: RIGHT };
 
-const DOOR = { x: 10, y: 7 };   // tile just outside the den gate
-const DEN = { x: 10, y: 9 };    // centre of the den
-const BONUS_TILE = { x: 10, y: 11 };
-const PLAYER_START = { x: 10, y: 15 };
+function findInMap(ch) {
+  for (let y = 0; y < ROWS; y++) {
+    const x = MAP[y].indexOf(ch);
+    if (x >= 0) return { x, y };
+  }
+  throw new Error(`Map is missing "${ch}"`);
+}
+const GATE = findInMap('-');
+const DOOR = { x: GATE.x, y: GATE.y - 1 };       // tile just outside the den gate
+const DEN = { x: GATE.x, y: GATE.y + 1 };        // centre of the den
+const BONUS_TILE = { x: GATE.x, y: GATE.y + 3 }; // corridor below the den
+const PLAYER_START = findInMap('P');
+const TUNNEL_ROW = MAP.findIndex(row => row[0] === ' ');
 
 // Scatter / chase phases in seconds (last one lasts forever).
 const PHASES = [7, 20, 7, 20, 5, 20, 5, Infinity];
@@ -218,7 +234,7 @@ const playerSpeed = () => Math.min(7.2 + 0.3 * (S.level - 1), 9);
 function enemySpeed(e) {
   if (e.state === 'eaten') return 16;
   if (e.state === 'den' || e.state === 'leaving' || e.state === 'entering') return 4;
-  const inTunnel = Math.round(e.y) === 9 && (e.x < 5 || e.x > COLS - 6);
+  const inTunnel = Math.round(e.y) === TUNNEL_ROW && cellAt(Math.round(e.x), TUNNEL_ROW) === ' ';
   if (inTunnel) return 3.5;
   if (e.fright) return 4.2;
   return Math.min(6.6 + 0.35 * (S.level - 1), 8.8);
@@ -427,7 +443,7 @@ function updatePlaying(dt) {
       addScore(10);
       Sound.pellet();
     }
-    if (S.pelletsEaten === 60 || S.pelletsEaten === 140) {
+    if (S.pelletsEaten === 90 || S.pelletsEaten === 220) {
       const i = Math.min(S.level - 1, BONUS_VALUES.length - 1);
       S.bonus = { ...BONUS_TILE, t: 9, value: BONUS_VALUES[i], color: BONUS_COLORS[i] };
     }
